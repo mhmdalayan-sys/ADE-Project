@@ -1,0 +1,72 @@
+import numpy as np
+import sounddevice as sd
+import scipy.fft as fft
+import time
+
+SAMPLE_RATE = 44100
+DURATION = 30
+FREQ_START = 1500
+
+def detect_top_freqs(chunk):
+    N = len(chunk)
+    window = np.hanning(N)
+    spec = fft.rfft(chunk * window)
+    freqs = fft.rfftfreq(N, 1/SAMPLE_RATE)
+    mags = np.abs(spec)
+    
+    # Get top 3 indices
+    idxs = np.argsort(mags)[-3:][::-1]
+    return [(freqs[idx], mags[idx]) for idx in idxs]
+
+def main():
+    print("="*40)
+    print("      DIAGNOSTIC DECODER")
+    print("="*40)
+    print("1. Set Phone Volume to 100%")
+    print("2. Hold Phone Mic close to Laptop Mic")
+    print(f"3. Recording for {DURATION}s...")
+    
+    audio = sd.rec(int(DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
+    
+    print("\n[*] RECORDING STARTED - CLICK 'SEND' ON PHONE NOW!")
+    
+    start_time = time.time()
+    last_print = 0
+    
+    # We can't analyze in real-time easily with sd.rec, 
+    # but we can poll the buffer or just wait and analyze.
+    # To make it interactive, let's use an InputStream.
+    
+    detected_start = False
+    
+    def callback(indata, frames, time_info, status):
+        nonlocal detected_start
+        chunk = indata[:, 0]
+        top = detect_top_freqs(chunk)
+        
+        # Only print every 0.2s to avoid spam
+        current = time.time()
+        nonlocal last_print
+        if current - last_print > 0.2:
+            f1, a1 = top[0]
+            print(f"\rTop Freq: {f1:7.1f}Hz (Amp: {a1:.5f}) | Status: {'[WAITING FOR 1500Hz]' if not detected_start else '[RECEIVING DATA]'}   ", end="")
+            last_print = current
+            
+            if abs(f1 - FREQ_START) < 150:
+                detected_start = True
+
+    try:
+        with sd.InputStream(callback=callback, samplerate=SAMPLE_RATE, channels=1):
+            sd.wait()
+    except KeyboardInterrupt:
+        pass
+    
+    print("\n\n[*] Done.")
+    if detected_start:
+        print("[+] SUCCESS: The laptop heard the 1500Hz Start Marker!")
+    else:
+        print("[-] FAILURE: The laptop never heard a clear 1500Hz signal.")
+        print("    Try moving the phone closer or increasing volume.")
+
+if __name__ == "__main__":
+    main()
